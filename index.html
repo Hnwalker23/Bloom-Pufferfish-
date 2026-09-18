@@ -186,6 +186,23 @@ button:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(180,67,105,.35)}
   }
 }
 
+
+#gameShell.hitShakeStrong{animation:hitShakeStrong .38s ease-out}
+@keyframes hitShakeStrong{
+  0%{transform:translate(0,0)}
+  14%{transform:translate(-11px,4px)}
+  30%{transform:translate(10px,-4px)}
+  46%{transform:translate(-8px,3px)}
+  62%{transform:translate(6px,-2px)}
+  80%{transform:translate(-3px,1px)}
+  100%{transform:translate(0,0)}
+}
+#hitBurst.strong{animation:hitBurstStrong .40s ease-out}
+@keyframes hitBurstStrong{
+  0%{opacity:1;box-shadow:inset 0 0 0 10px rgba(255,124,166,.82)}
+  100%{opacity:0;box-shadow:inset 0 0 70px 28px rgba(255,124,166,0)}
+}
+
 </style>
 </head>
 <body>
@@ -328,54 +345,114 @@ button:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(180,67,105,.35)}
   function spawnItem(){
     const d=difficulty();
     const bad=Math.random()<d.badChance;
-    const y=rand(80,H-105);
+    const y=rand(80,H-135);
+    // Keep new objects separated from other fresh objects and incoming sharks.
+    let safeY=y;
+    for(let tries=0;tries<8;tries++){
+      const itemConflict=state.items.some(o=>o.x>W-100 && Math.abs(o.y-safeY)<62);
+      const sharkConflict=state.predators.some(s=>s.x>W-180 && Math.abs(s.y-safeY)<90);
+      if(!itemConflict && !sharkConflict)break;
+      safeY=rand(82,H-135);
+    }
+
     if(bad){
       const kinds=['bag','bottle','can'];
       state.items.push({
         type:'bad',kind:kinds[(Math.random()*kinds.length)|0],
-        x:W+40,y,r:18,w:rand(0,Math.PI*2),phase:rand(0,10)
+        x:W+40,y:safeY,r:18,w:rand(0,Math.PI*2),phase:rand(0,10)
       });
     }else{
       const kinds=['fish','shrimp','plankton'];
       const kind=kinds[(Math.random()*kinds.length)|0];
       const value=kind==='fish'?7:kind==='shrimp'?5:3;
       state.items.push({
-        type:'good',kind,x:W+40,y,r:kind==='fish'?17:kind==='shrimp'?13:10,
+        type:'good',kind,x:W+40,y:safeY,r:kind==='fish'?17:kind==='shrimp'?13:10,
         value,w:rand(0,Math.PI*2),phase:rand(0,10)
       });
     }
   }
 
-  function triggerHitEffect(){
-    gameShell.classList.remove('hitShake');
-    hitBurst.classList.remove('active');
+  function triggerHitEffect(kind='trash'){
+    gameShell.classList.remove('hitShake','hitShakeStrong');
+    hitBurst.classList.remove('active','strong');
 
-    // restart the animations even on back-to-back hits
     void gameShell.offsetWidth;
     void hitBurst.offsetWidth;
 
-    gameShell.classList.add('hitShake');
-    hitBurst.classList.add('active');
-
-    setTimeout(()=>gameShell.classList.remove('hitShake'),320);
-    setTimeout(()=>hitBurst.classList.remove('active'),380);
+    if(kind==='shark'){
+      gameShell.classList.add('hitShakeStrong');
+      hitBurst.classList.add('active','strong');
+      setTimeout(()=>gameShell.classList.remove('hitShakeStrong'),390);
+    }else{
+      gameShell.classList.add('hitShake');
+      hitBurst.classList.add('active');
+      setTimeout(()=>gameShell.classList.remove('hitShake'),260);
+    }
+    setTimeout(()=>hitBurst.classList.remove('active','strong'),400);
   }
 
   function spawnPredator(){
     const wave=state.predatorWave++;
     const count=Math.min(3,wave+1);
-    const baseY=rand(120,H-145);
+
+    // Build every wave around a guaranteed safe corridor.
+    // The corridor scales with the puffer's CURRENT collision height, so a larger
+    // puffer still has enough room to pass.
+    const fishW=playerWidth();
+    const fishH=fishW*(277/340);
+    const safeGap=Math.max(105,fishH*.54+42);
+
+    // Keep shark bodies and the safe route out of the bottom HUD zone.
+    const topLimit=92;
+    const bottomLimit=H-150;
+
+    // Pick a safe corridor center from three readable regions.
+    const corridorChoices=[
+      topLimit+safeGap*.55,
+      (topLimit+bottomLimit)/2,
+      bottomLimit-safeGap*.55
+    ];
+    const safeY=corridorChoices[(Math.random()*corridorChoices.length)|0];
+    const gapTop=safeY-safeGap/2;
+    const gapBottom=safeY+safeGap/2;
+
+    // Candidate shark lanes must sit outside the protected corridor.
+    const upperY=Math.max(topLimit, gapTop-58);
+    const lowerY=Math.min(bottomLimit, gapBottom+58);
+
+    let positions;
+    if(count===1){
+      // One shark: random side of the safe corridor.
+      positions=[Math.random()<.5 ? upperY : lowerY];
+    }else if(count===2){
+      // Two sharks frame the route without closing it.
+      positions=[upperY,lowerY];
+    }else{
+      // Three sharks form a staggered obstacle instead of a vertical wall.
+      // Two approach from one side of the corridor at different X offsets and
+      // the third approaches from the other side.
+      const doubleTop=Math.random()<.5;
+      positions=doubleTop
+        ? [upperY,upperY,lowerY]
+        : [upperY,lowerY,lowerY];
+    }
 
     for(let i=0;i<count;i++){
-      const spread=(i-(count-1)/2)*95;
+      // Extra horizontal staggering is especially important in the 3-shark wave:
+      // the player sees a path rather than one solid vertical barrier.
+      const xOffset=count===3 ? i*145 : i*100;
+      const yNudge=(count===3 && ((positions[0]===positions[1] && i===1) ||
+                    (positions[1]===positions[2] && i===2))) ? 18 : 0;
+
       state.predators.push({
-        x:W+150+i*78,
-        y:clamp(baseY+spread,95,H-125),
+        x:W+150+xOffset,
+        y:clamp(positions[i]+yNudge,topLimit,bottomLimit),
         w:150+wave*14,
         h:72+wave*7,
         speed:205+wave*30,
         penalty:8+wave*5,
-        phase:rand(0,Math.PI*2)
+        phase:rand(0,Math.PI*2),
+        safeY:safeY
       });
     }
 
@@ -409,7 +486,7 @@ button:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(180,67,105,.35)}
     else if(keys.down)p.vy=speed;
     else if(state.pointerY!==null)p.vy=clamp((state.pointerY-p.y)*7,-speed,speed);
     else p.vy*=.84;
-    p.y=clamp(p.y+p.vy*dt,r*.7+20,H-60-r*.7);
+    p.y=clamp(p.y+p.vy*dt,r*.7+20,H-92-r*.7);
     p.invuln=Math.max(0,p.invuln-dt);
     p.sad=Math.max(0,p.sad-dt);
     const sadTarget=p.sad>0 ? 1 : 0;
@@ -427,12 +504,37 @@ button:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(180,67,105,.35)}
       it.x-=d.speed*dt;
       it.w+=dt*2.6;
       it.y+=Math.sin(it.w+it.phase)*8*dt;
-      const dx=it.x-p.x,dy=it.y-p.y;
-      if(Math.hypot(dx,dy)<it.r+r*.70 && p.invuln<=0){
+      const fishW=playerWidth(), fishH=fishW*(277/340);
+
+      // FOOD: keep collection generous so eating still feels responsive.
+      const foodDx=it.x-p.x, foodDy=it.y-p.y;
+      const foodRx=fishW*.34+it.r*.72;
+      const foodRy=fishH*.30+it.r*.72;
+      const foodOverlap=((foodDx*foodDx)/(foodRx*foodRx)+(foodDy*foodDy)/(foodRy*foodRy))<=1;
+
+      // TRASH: damage requires contact with the puffer's SOLID round body.
+      // Decorative spikes and the extreme outer silhouette do not count.
+      // The body zone reaches farther backward than the old v13 shark zone so a
+      // clear hit through the yellow body still registers.
+      const bodyX=p.x+fishW*.025;
+      const bodyY=p.y+fishH*.005;
+      const trashDx=it.x-bodyX, trashDy=it.y-bodyY;
+
+      // Different trash shapes get slightly different contact sizes instead of
+      // treating every piece as the same large circle.
+      const trashScale=it.kind==='bag' ? .58 : it.kind==='bottle' ? .48 : .52;
+      const trashRx=fishW*.255+it.r*trashScale;
+      const trashRy=fishH*.235+it.r*trashScale;
+      const trashOverlap=((trashDx*trashDx)/(trashRx*trashRx)+(trashDy*trashDy)/(trashRy*trashRy))<=1;
+
+      const overlaps=it.type==='good' ? foodOverlap : trashOverlap;
+
+      if(overlaps && (it.type==='good' || p.invuln<=0)){
         if(it.type==='good'){
           state.growth=clamp(state.growth+it.value,0,100);state.good++;
         }else{
-          state.growth=clamp(state.growth-12,0,100);state.bad++;p.invuln=.7;p.sad=.95;triggerHitEffect();
+          state.growth=clamp(state.growth-12,0,100);state.bad++;p.invuln=.7;p.sad=.95;
+          triggerHitEffect('trash');
         }
         state.items.splice(i,1);
         continue;
@@ -445,14 +547,30 @@ button:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(180,67,105,.35)}
       pr.x-=pr.speed*dt;
       pr.y+=Math.sin(state.bob*2.1+pr.phase)*10*dt;
 
-      const hitRadius=Math.min(pr.w*.42,pr.h*.55);
-      const dx=pr.x-p.x,dy=pr.y-p.y;
-      if(Math.hypot(dx,dy)<hitRadius+r*.72 && p.invuln<=0){
+      // Shark damage uses the puffer's SOLID round body, not its spikes.
+      // It is only slightly front-biased: the rear outer edge is forgiving, but a
+      // shark clearly entering the yellow body from behind still counts.
+      const fishW=playerWidth(), fishH=fishW*(277/340);
+      const bodyX=p.x+fishW*.035;
+      const bodyY=p.y+fishH*.005;
+
+      // Use the shark's head/front body; tail and fins remain non-damaging.
+      const sharkHeadX=pr.x-pr.w*.245;
+      const sharkHeadY=pr.y;
+
+      const dx=sharkHeadX-bodyX;
+      const dy=sharkHeadY-bodyY;
+      const rx=fishW*.255+pr.w*.13;
+      const ry=fishH*.235+pr.h*.18;
+      const sharkOverlap=((dx*dx)/(rx*rx)+(dy*dy)/(ry*ry))<=1;
+
+      if(sharkOverlap && p.invuln<=0){
         state.growth=clamp(state.growth-pr.penalty,0,100);
         state.predatorHits++;
         p.invuln=1.0;
         p.sad=1.25;
-        triggerHitEffect();
+        triggerHitEffect('shark');
+        // One shark can only damage once; remove it after contact.
         state.predators.splice(i,1);
         continue;
       }
